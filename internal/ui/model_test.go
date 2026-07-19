@@ -30,8 +30,8 @@ func TestNavigationDetailOutcomesAndHelp(t *testing.T) {
 		t.Fatalf("mode after enter = %v, want detail", m.Mode())
 	}
 	m = press(t, m, "j")
-	if m.DetailOffset() != 1 {
-		t.Fatalf("detail j should scroll, offset = %d", m.DetailOffset())
+	if m.SelectedMetric() != 1 {
+		t.Fatalf("detail j should select next metric, selected = %d", m.SelectedMetric())
 	}
 	m = press(t, m, "o")
 	if m.Mode() != ViewOutcomes {
@@ -123,6 +123,61 @@ func TestOutcomeTitleMarksPartialWindow(t *testing.T) {
 	}
 }
 
+func TestOutcomeViewColorizesSuccessfulAndUnsuccessfulResults(t *testing.T) {
+	snap := testSnapshot(false)
+	one := time.Minute
+	snap.Rows[0].EngineOutcomes[one] = []domain.EngineOutcome{
+		{Reason: "stop", Count: domain.Value(10, "count", one, one)},
+		{Reason: "length", Count: domain.Value(2, "count", one, one)},
+		{Reason: "abort", Count: domain.Value(1, "count", one, one)},
+	}
+	snap.Rows[0].HTTPOutcomes[one] = []domain.HTTPOutcome{
+		{Status: "2xx", Method: "POST", Handler: "/v1/chat/completions", Count: domain.Value(10, "count", one, one)},
+		{Status: "4xx", Method: "POST", Handler: "/v1/chat/completions", Count: domain.Value(2, "count", one, one)},
+		{Status: "500", Method: "POST", Handler: "/v1/chat/completions", Count: domain.Value(1, "count", one, one)},
+	}
+
+	m := NewModel(nil, Options{InitialWidth: 120, InitialHeight: 40})
+	m = updateModel(t, m, SnapshotMsg{Snapshot: snap})
+	m = press(t, m, "o")
+	view := m.View()
+
+	for _, want := range []string{"WINDOW 1m", "REASON", "STATUS"} {
+		if !strings.Contains(stripANSI(view), want) {
+			t.Fatalf("outcome view missing %q:\n%s", want, view)
+		}
+	}
+
+	st := newStyles(false)
+	assertForegroundColor(t, engineOutcomeStyle("stop", st), lipgloss.Color("42"))
+	assertForegroundColor(t, engineOutcomeStyle("length", st), lipgloss.Color("203"))
+	assertForegroundColor(t, engineOutcomeStyle("abort", st), lipgloss.Color("203"))
+	assertForegroundColor(t, httpOutcomeStyle("2xx", st), lipgloss.Color("42"))
+	assertForegroundColor(t, httpOutcomeStyle("4xx", st), lipgloss.Color("203"))
+	assertForegroundColor(t, httpOutcomeStyle("500", st), lipgloss.Color("203"))
+}
+
+func TestHTTPStatusClass(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		want   int
+	}{
+		{status: "2xx", want: 2},
+		{status: "200", want: 2},
+		{status: "204", want: 2},
+		{status: "4xx", want: 4},
+		{status: "404", want: 4},
+		{status: "5xx", want: 5},
+		{status: "500", want: 5},
+		{status: "3xx", want: 3},
+		{status: "status unavailable", want: 0},
+	} {
+		if got := httpStatusClass(tc.status); got != tc.want {
+			t.Fatalf("httpStatusClass(%q) = %d, want %d", tc.status, got, tc.want)
+		}
+	}
+}
+
 func TestGroupingToggleOrdersRowsAndPreservesSelection(t *testing.T) {
 	now := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
 	snap := domain.AppSnapshot{
@@ -195,7 +250,88 @@ func TestColoredAndNoColorRowsHaveSameVisibleGeometry(t *testing.T) {
 	}
 }
 
-func TestDetailExtremaNoMetricCursorAndScroll(t *testing.T) {
+func TestInteractiveColorIsForcedForPlainScreenTerm(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("TERM", "screen")
+	t.Setenv("COLORTERM", "")
+
+	m := NewModel(nil, Options{InitialWidth: 120, InitialHeight: 40})
+	m = updateModel(t, m, SnapshotMsg{Snapshot: testSnapshot(false)})
+	view := m.View()
+
+	if !strings.Contains(view, "\x1b[") || !strings.Contains(view, "38;5;") {
+		t.Fatalf("interactive view did not force ANSI256 color for TERM=screen:\n%q", view)
+	}
+}
+
+func TestOverviewStatusStyleDoesNotLeakSelectedBackground(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+
+	m := NewModel(nil, Options{InitialWidth: 120, InitialHeight: 40})
+	m = updateModel(t, m, SnapshotMsg{Snapshot: testSnapshot(false)})
+	m = press(t, m, "down")
+	m = press(t, m, "up")
+	view := m.View()
+	lines := strings.Split(view, "\n")
+
+	unselectedRow := rawLineContaining(lines, "qwen")
+	if strings.Contains(unselectedRow, "48;5;60") {
+		t.Fatalf("unselected row kept selected background:\n%s", view)
+	}
+	selectedStatus := rawLineContaining(lines, "selected google/gemma-3-27b-it")
+	if strings.Contains(selectedStatus, "48;5;60") {
+		t.Fatalf("selected status line kept selected background:\n%s", view)
+	}
+}
+
+func TestMouseClicksSelectOverviewAndDetailRows(t *testing.T) {
+	m := NewModel(nil, Options{NoColor: true, InitialWidth: 120, InitialHeight: 40})
+	m = updateModel(t, m, SnapshotMsg{Snapshot: testSnapshot(false)})
+
+	m = updateModel(t, m, mouseClick(screenBodyStartY+2))
+	if m.SelectedRow() != 1 {
+		t.Fatalf("overview click selected row = %d, want 1", m.SelectedRow())
+	}
+
+	m = press(t, m, "enter")
+	row := m.selected()
+	if row == nil {
+		t.Fatalf("detail row not selected")
+	}
+	m = updateModel(t, m, mouseClick(screenBodyStartY+detailMetricBodyIndex(*row, 2)))
+	if m.SelectedMetric() != 2 {
+		t.Fatalf("detail click selected metric = %d, want 2", m.SelectedMetric())
+	}
+	view := m.View()
+	line := firstLineContaining(strings.Split(view, "\n"), "TTFT p95, s")
+	if !strings.HasPrefix(strings.TrimSpace(line), ">") {
+		t.Fatalf("clicked metric row is not visibly selected:\n%s", view)
+	}
+}
+
+func TestDetailRowsUseSelectorNotAlternatingGray(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+
+	m := NewModel(nil, Options{InitialWidth: 120, InitialHeight: 40})
+	m = updateModel(t, m, SnapshotMsg{Snapshot: testSnapshot(false)})
+	m = press(t, m, "enter")
+	view := m.View()
+
+	plain := stripANSI(view)
+	if !strings.Contains(plain, "> RPS, req/s") {
+		t.Fatalf("detail selected metric selector missing:\n%s", view)
+	}
+	for _, gray := range []string{"38;5;250", "38;5;252"} {
+		if strings.Contains(view, gray) {
+			t.Fatalf("detail kept alternating gray row color %s:\n%s", gray, view)
+		}
+	}
+	if !strings.Contains(view, "48;5;60") {
+		t.Fatalf("detail selected metric row is not highlighted:\n%s", view)
+	}
+}
+
+func TestDetailExtremaMetricSelectorAndScroll(t *testing.T) {
 	snap := testSnapshot(false)
 	snap.Rows[0].Metrics = manyMetrics(snap.Rows[0].Metrics, 20)
 	m := NewModel(nil, Options{NoColor: true, InitialWidth: 100, InitialHeight: 10})
@@ -217,15 +353,17 @@ func TestDetailExtremaNoMetricCursorAndScroll(t *testing.T) {
 			t.Fatalf("detail contains unwanted unit display %q:\n%s", unwanted, view)
 		}
 	}
-	for _, line := range strings.Split(view, "\n") {
-		if strings.HasPrefix(strings.TrimLeft(line, " "), ">") && strings.Contains(line, "Metric ") {
-			t.Fatalf("detail metric row contains cursor:\n%s", view)
-		}
+	line := firstLineContaining(strings.Split(view, "\n"), "RPS, req/s")
+	if !strings.HasPrefix(strings.TrimSpace(line), ">") {
+		t.Fatalf("detail selected metric row lacks selector:\n%s", view)
 	}
 	if strings.Contains(view, "Extra metric 19") {
 		t.Fatalf("last metric should not be visible before scrolling:\n%s", view)
 	}
 	m = press(t, m, "end")
+	if m.SelectedMetric() != len(snap.Rows[0].Metrics)-1 {
+		t.Fatalf("end selected metric = %d, want %d", m.SelectedMetric(), len(snap.Rows[0].Metrics)-1)
+	}
 	view = m.View()
 	if !strings.Contains(view, "Extra metric 19") {
 		t.Fatalf("short detail view did not scroll to final metric:\n%s", view)
@@ -411,6 +549,10 @@ func keyMsg(key string) tea.KeyMsg {
 	}
 }
 
+func mouseClick(y int) tea.MouseMsg {
+	return tea.MouseMsg(tea.MouseEvent{Type: tea.MouseLeft, Y: y})
+}
+
 func hasBrokenCSI(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] != '\x1b' {
@@ -449,10 +591,26 @@ func stripANSI(s string) string {
 	return b.String()
 }
 
+func assertForegroundColor(t *testing.T, style lipgloss.Style, want lipgloss.Color) {
+	t.Helper()
+	if got := style.GetForeground(); got != want {
+		t.Fatalf("foreground = %#v, want %#v", got, want)
+	}
+}
+
 func firstLineContaining(lines []string, needle string) string {
 	for _, line := range lines {
 		if strings.Contains(stripANSI(line), needle) {
 			return stripANSI(line)
+		}
+	}
+	return ""
+}
+
+func rawLineContaining(lines []string, needle string) string {
+	for _, line := range lines {
+		if strings.Contains(stripANSI(line), needle) {
+			return line
 		}
 	}
 	return ""

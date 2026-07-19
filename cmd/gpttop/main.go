@@ -231,7 +231,7 @@ func runInteractive(cfg domain.RuntimeConfig, opts cliOptions, stderr io.Writer)
 			}
 		},
 	}
-	program := ui.NewProgram(provider, uiOpts, tea.WithAltScreen())
+	program := ui.NewProgram(provider, uiOpts, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	var wg sync.WaitGroup
 	if cfg.Demo {

@@ -38,7 +38,12 @@ type plannedColumn struct {
 	width  int
 }
 
-func renderCellTable(columns []tableColumn, rows [][]tableCell, width int, st styles, selectedRow int) ([]string, bool) {
+type tableOptions struct {
+	SelectedRow int
+	RowStyle    func(row int) lipgloss.Style
+}
+
+func renderCellTableWithOptions(columns []tableColumn, rows [][]tableCell, width int, st styles, opts tableOptions) ([]string, bool) {
 	planned, ok := planColumns(columns, width)
 	if !ok {
 		return nil, false
@@ -48,9 +53,13 @@ func renderCellTable(columns []tableColumn, rows [][]tableCell, width int, st st
 	for i, column := range columns {
 		headerCells[i] = tableCell{Text: columnHeaderText(column), Style: st.header}
 	}
-	lines = append(lines, renderPlannedRow(planned, headerCells, width, st, false))
+	lines = append(lines, renderPlannedRow(planned, headerCells, width, st, lipgloss.Style{}, false))
 	for i, row := range rows {
-		lines = append(lines, renderPlannedRow(planned, row, width, st, i == selectedRow))
+		var rowStyle lipgloss.Style
+		if opts.RowStyle != nil {
+			rowStyle = opts.RowStyle(i)
+		}
+		lines = append(lines, renderPlannedRow(planned, row, width, st, rowStyle, i == opts.SelectedRow))
 	}
 	return lines, true
 }
@@ -169,7 +178,10 @@ func droppableColumn(columns []tableColumn, visible []bool) int {
 	return drop
 }
 
-func renderPlannedRow(columns []plannedColumn, cells []tableCell, width int, st styles, selected bool) string {
+func renderPlannedRow(columns []plannedColumn, cells []tableCell, width int, st styles, rowStyle lipgloss.Style, selected bool) string {
+	if selected {
+		rowStyle = st.selected
+	}
 	parts := make([]string, 0, len(columns))
 	for _, column := range columns {
 		cell := tableCell{Text: "-"}
@@ -178,16 +190,27 @@ func renderPlannedRow(columns []plannedColumn, cells []tableCell, width int, st 
 		}
 		text := fitPlainCell(cell.Text, column.width, column.column.Align)
 		if !st.noColor {
-			text = cell.Style.Render(text)
+			text = mergeCellStyle(cell.Style, rowStyle).Render(text)
 		}
 		parts = append(parts, text)
 	}
-	line := strings.Join(parts, " ")
-	line = padVisible(line, width)
-	if selected && !st.noColor {
-		line = st.selected.Render(line)
+	separator := " "
+	if !st.noColor {
+		separator = rowStyle.Render(separator)
+	}
+	line := strings.Join(parts, separator)
+	if padding := width - lipgloss.Width(line); padding > 0 {
+		pad := strings.Repeat(" ", padding)
+		if !st.noColor {
+			pad = rowStyle.Render(pad)
+		}
+		line += pad
 	}
 	return fitLine(line, width)
+}
+
+func mergeCellStyle(cellStyle, rowStyle lipgloss.Style) lipgloss.Style {
+	return cellStyle.Copy().Inherit(rowStyle.Copy())
 }
 
 func fitPlainCell(s string, width int, align cellAlign) string {

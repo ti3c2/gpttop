@@ -52,14 +52,15 @@ type Model struct {
 	width    int
 	height   int
 
-	mode          ViewMode
-	selectedRow   int
-	detailOffset  int
-	outcomeWindow time.Duration
-	groupByModel  bool
-	showHelp      bool
-	lastOp        OperationalMsg
-	quitting      bool
+	mode           ViewMode
+	selectedRow    int
+	selectedMetric int
+	detailOffset   int
+	outcomeWindow  time.Duration
+	groupByModel   bool
+	showHelp       bool
+	lastOp         OperationalMsg
+	quitting       bool
 }
 
 func NewModel(provider domain.SnapshotProvider, opts Options) Model {
@@ -112,8 +113,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = v.Width
 		m.height = v.Height
+		m.ensureSelectedMetricVisible()
 	case tea.KeyMsg:
 		return m.handleKey(v)
+	case tea.MouseMsg:
+		return m.handleMouse(v)
 	}
 	return m, nil
 }
@@ -142,6 +146,10 @@ func (m Model) DetailOffset() int {
 	return m.detailOffset
 }
 
+func (m Model) SelectedMetric() int {
+	return m.selectedMetric
+}
+
 func (m Model) HelpVisible() bool {
 	return m.showHelp
 }
@@ -160,11 +168,13 @@ func (m *Model) applySnapshot(s domain.AppSnapshot) {
 	m.clampSelection()
 	m.restoreSelectedKey(key)
 	m.clampSelection()
+	m.ensureSelectedMetricVisible()
 }
 
 func (m *Model) clampSelection() {
 	if len(m.snapshot.Rows) == 0 {
 		m.selectedRow = 0
+		m.selectedMetric = 0
 		m.detailOffset = 0
 		return
 	}
@@ -177,6 +187,7 @@ func (m *Model) clampSelection() {
 	if m.detailOffset < 0 {
 		m.detailOffset = 0
 	}
+	m.clampMetricSelection()
 }
 
 func (m Model) selected() *domain.ModelSnapshot {
@@ -207,6 +218,8 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.mode = ViewDetail
 				m.detailOffset = 0
+				m.clampMetricSelection()
+				m.ensureSelectedMetricVisible()
 			}
 		}
 	case "o":
@@ -248,13 +261,43 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return *m, nil
 }
 
+func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	event := tea.MouseEvent(msg)
+	if m.showHelp {
+		return *m, nil
+	}
+	switch event.Type {
+	case tea.MouseLeft:
+		switch m.mode {
+		case ViewOverview:
+			if row, ok := m.overviewRowAt(event.Y); ok {
+				m.selectedRow = row
+				m.clampSelection()
+			}
+		case ViewDetail:
+			if metric, ok := m.detailMetricAt(event.Y); ok {
+				m.selectedMetric = metric
+				m.clampMetricSelection()
+				m.ensureSelectedMetricVisible()
+			}
+		}
+	case tea.MouseWheelUp:
+		m.moveSelection(-1)
+		m.clampSelection()
+	case tea.MouseWheelDown:
+		m.moveSelection(1)
+		m.clampSelection()
+	}
+	return *m, nil
+}
+
 func (m *Model) moveSelection(delta int) {
 	if m.mode == ViewOverview {
 		m.selectedRow += delta
 		return
 	}
 	if m.mode == ViewDetail {
-		m.scrollDetail(delta)
+		m.moveMetricSelection(delta)
 	}
 }
 
@@ -262,10 +305,112 @@ func (m *Model) scrollDetail(delta int) {
 	if m.mode != ViewDetail {
 		return
 	}
-	m.detailOffset += delta
-	if m.detailOffset < 0 {
+	m.moveMetricSelection(delta)
+}
+
+func (m *Model) moveMetricSelection(delta int) {
+	row := m.selected()
+	if row == nil || len(row.Metrics) == 0 {
+		m.selectedMetric = 0
 		m.detailOffset = 0
+		return
 	}
+	m.selectedMetric += delta
+	m.clampMetricSelection()
+	m.ensureSelectedMetricVisible()
+}
+
+func (m *Model) clampMetricSelection() {
+	row := m.selected()
+	if row == nil || len(row.Metrics) == 0 {
+		m.selectedMetric = 0
+		m.detailOffset = 0
+		return
+	}
+	if m.selectedMetric < 0 {
+		m.selectedMetric = 0
+	}
+	if m.selectedMetric >= len(row.Metrics) {
+		m.selectedMetric = len(row.Metrics) - 1
+	}
+}
+
+func (m *Model) ensureSelectedMetricVisible() {
+	if m.mode != ViewDetail {
+		return
+	}
+	row := m.selected()
+	if row == nil || len(row.Metrics) == 0 {
+		m.detailOffset = 0
+		return
+	}
+	bodyLimit := contentHeight(m.height)
+	bodyLen := detailBodyLen(*row)
+	if bodyLimit <= 1 || bodyLen <= bodyLimit {
+		m.detailOffset = 0
+		return
+	}
+	visibleLimit := bodyLimit - 1
+	target := detailMetricBodyIndex(*row, m.selectedMetric)
+	if target < m.detailOffset {
+		m.detailOffset = target
+	}
+	if target >= m.detailOffset+visibleLimit {
+		m.detailOffset = target - visibleLimit + 1
+	}
+	m.detailOffset = clampScrollOffset(m.detailOffset, bodyLen, visibleLimit)
+}
+
+func (m Model) overviewRowAt(y int) (int, bool) {
+	if m.mode != ViewOverview || len(m.snapshot.Rows) == 0 {
+		return 0, false
+	}
+	bodyIndex := y - screenBodyStartY
+	if bodyIndex < 1 {
+		return 0, false
+	}
+	bodyLimit := contentHeight(m.height)
+	if bodyLimit >= 0 && bodyIndex >= bodyLimit {
+		return 0, false
+	}
+	row := bodyIndex - 1
+	if row < 0 || row >= len(m.rowOrder()) {
+		return 0, false
+	}
+	return row, true
+}
+
+func (m Model) detailMetricAt(y int) (int, bool) {
+	if m.mode != ViewDetail {
+		return 0, false
+	}
+	row := m.selected()
+	if row == nil || len(row.Metrics) == 0 {
+		return 0, false
+	}
+	bodyIndex := y - screenBodyStartY
+	if bodyIndex < 0 {
+		return 0, false
+	}
+	bodyLimit := contentHeight(m.height)
+	bodyLen := detailBodyLen(*row)
+	if bodyLimit >= 0 && bodyLen > bodyLimit {
+		if bodyLimit <= 1 {
+			return 0, false
+		}
+		visibleLimit := bodyLimit - 1
+		if bodyIndex >= visibleLimit {
+			return 0, false
+		}
+		bodyIndex += clampScrollOffset(m.detailOffset, bodyLen, visibleLimit)
+	} else if bodyLimit >= 0 && bodyIndex >= bodyLimit {
+		return 0, false
+	}
+	metric := bodyIndex - detailMetricBodyIndex(*row, 0)
+	if metric < 0 || metric >= len(row.Metrics) {
+		return 0, false
+	}
+	return metric, true
 }
 
 func (m Model) selectedRowIndex() (int, bool) {

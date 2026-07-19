@@ -3,25 +3,29 @@ package ui
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"gpttop/internal/domain"
 )
 
 type styles struct {
-	noColor   bool
-	selected  lipgloss.Style
-	muted     lipgloss.Style
-	good      lipgloss.Style
-	warn      lipgloss.Style
-	bad       lipgloss.Style
-	header    lipgloss.Style
-	title     lipgloss.Style
-	separator lipgloss.Style
+	noColor       bool
+	selected      lipgloss.Style
+	muted         lipgloss.Style
+	good          lipgloss.Style
+	warn          lipgloss.Style
+	bad           lipgloss.Style
+	header        lipgloss.Style
+	title         lipgloss.Style
+	separator     lipgloss.Style
+	section       lipgloss.Style
+	outcomeWindow lipgloss.Style
 }
 
 type keyBinding struct {
@@ -34,9 +38,15 @@ type keyBinding struct {
 	Scroll   bool
 }
 
+const screenBodyStartY = 2
+
 var keyBindings = []keyBinding{
 	{Keys: "j/k", Action: "select row", Overview: true},
-	{Keys: "j/k", Action: "scroll", Detail: true, Scroll: true},
+	{Keys: "click", Action: "select row", Overview: true},
+	{Keys: "j/k", Action: "select metric", Detail: true},
+	{Keys: "click", Action: "select metric", Detail: true},
+	{Keys: "pgup/pgdn", Action: "page metric", Detail: true},
+	{Keys: "home/end", Action: "first/last metric", Detail: true},
 	{Keys: "enter", Action: "detail", Overview: true, Outcomes: true},
 	{Keys: "enter", Action: "overview", Detail: true},
 	{Keys: "esc", Action: "overview", Detail: true, Outcomes: true},
@@ -54,14 +64,17 @@ func newStyles(noColor bool) styles {
 	if noColor {
 		return s
 	}
-	s.selected = lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("62"))
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	s.selected = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255")).Background(lipgloss.Color("60"))
 	s.muted = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	s.good = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	s.warn = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	s.bad = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	s.header = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
+	s.header = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
 	s.title = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
 	s.separator = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	s.section = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
+	s.outcomeWindow = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255")).Background(lipgloss.Color("236"))
 	return s
 }
 
@@ -204,7 +217,9 @@ func overviewTable(m Model, st styles) []string {
 			{Text: formatOverviewValue(row.Overview.Errors)},
 		})
 	}
-	lines, ok := renderCellTable(columns, rows, m.width, st, m.selectedRow)
+	lines, ok := renderCellTableWithOptions(columns, rows, m.width, st, tableOptions{
+		SelectedRow: m.selectedRow,
+	})
 	if ok {
 		return lines
 	}
@@ -230,8 +245,11 @@ func overviewCompact(m Model, st styles) []string {
 			formatOverviewValue(row.Overview.Errors),
 		)
 		line = fitLine(line, m.width)
-		if displayIndex == m.selectedRow && !st.noColor {
-			line = st.selected.Render(padVisible(line, m.width))
+		if !st.noColor {
+			line = padVisible(line, m.width)
+			if displayIndex == m.selectedRow {
+				line = st.selected.Render(line)
+			}
 		}
 		lines = append(lines, line)
 	}
@@ -302,16 +320,61 @@ func detailScreen(m Model, st styles) (string, []string, bool) {
 	if len(row.Metrics) == 0 {
 		lines = append(lines, "no metrics available")
 	} else {
-		lines = append(lines, detailTable(*row, m.width, st)...)
-		lines = append(lines, "partial columns are marked ~; missing values are shown as -; > marks a histogram bucket bound")
+		lines = append(lines, detailTable(*row, m.selectedMetric, m.width, st)...)
+		lines = append(lines, "partial columns are marked ~; missing values are -; selector > marks the metric; value > marks a histogram bucket bound")
 	}
 	scrollable := len(lines) > contentHeight(m.height)
 	return title, lines, scrollable
 }
 
-func detailTable(row domain.ModelSnapshot, width int, st styles) []string {
+func detailBodyLen(row domain.ModelSnapshot) int {
+	intro := detailIntroLineCount(row) + 1
+	if len(row.Metrics) == 0 {
+		return intro + 1
+	}
+	return intro + 1 + len(row.Metrics) + 1
+}
+
+func detailIntroLineCount(row domain.ModelSnapshot) int {
+	lines := 3
+	if row.Restarted {
+		lines++
+	}
+	if row.LastError != "" {
+		lines++
+	}
+	if len(row.Warnings) > 0 {
+		lines++
+	}
+	return lines
+}
+
+func detailTableHeaderBodyIndex(row domain.ModelSnapshot) int {
+	return detailIntroLineCount(row) + 1
+}
+
+func detailMetricBodyIndex(row domain.ModelSnapshot, metric int) int {
+	return detailTableHeaderBodyIndex(row) + 1 + metric
+}
+
+func clampScrollOffset(offset, bodyLen, visibleLimit int) int {
+	if visibleLimit <= 0 || bodyLen <= visibleLimit {
+		return 0
+	}
+	maxOffset := bodyLen - visibleLimit
+	if offset < 0 {
+		return 0
+	}
+	if offset > maxOffset {
+		return maxOffset
+	}
+	return offset
+}
+
+func detailTable(row domain.ModelSnapshot, selectedMetric, width int, st styles) []string {
 	partials := detailPartialColumns(row.Metrics)
 	columns := []tableColumn{
+		{ID: "sel", Header: " ", MinWidth: 1, PreferredWidth: 1, Priority: 0, Align: alignLeft},
 		{ID: "metric", Header: "METRIC", MinWidth: 14, PreferredWidth: 34, Priority: 0, Align: alignLeft, Flexible: true},
 		{ID: "now", Header: "NOW", MinWidth: 7, PreferredWidth: 10, Priority: 0, Align: alignRight},
 		{ID: "one", Header: "1m", Partial: partials.OneMin, MinWidth: 7, PreferredWidth: 10, Priority: 2, DropOrder: 1, Align: alignRight},
@@ -321,8 +384,13 @@ func detailTable(row domain.ModelSnapshot, width int, st styles) []string {
 		{ID: "max15", Header: "MAX 15m", Partial: partials.MaxFifteen, MinWidth: 8, PreferredWidth: 10, Priority: 0, Align: alignRight},
 	}
 	rows := make([][]tableCell, 0, len(row.Metrics))
-	for _, metric := range row.Metrics {
+	for i, metric := range row.Metrics {
+		selector := " "
+		if i == selectedMetric {
+			selector = ">"
+		}
 		rows = append(rows, []tableCell{
+			{Text: selector},
 			{Text: detailMetricLabel(metric)},
 			{Text: formatMetricValue(metric.Now, metric.Unit)},
 			{Text: formatMetricValue(metric.OneMin, metric.Unit)},
@@ -332,7 +400,9 @@ func detailTable(row domain.ModelSnapshot, width int, st styles) []string {
 			{Text: formatMetricValue(metric.MaxFifteen, metric.Unit)},
 		})
 	}
-	lines, ok := renderCellTable(columns, rows, width, st, -1)
+	lines, ok := renderCellTableWithOptions(columns, rows, width, st, tableOptions{
+		SelectedRow: selectedMetric,
+	})
 	if ok {
 		return lines
 	}
@@ -380,40 +450,138 @@ func outcomesBody(m Model, st styles) []string {
 	if row == nil {
 		return overviewBody(m, st)
 	}
-	var lines []string
+	window := domain.DurationLabel(m.outcomeWindow)
+	if outcomeWindowPartial(*row, m.outcomeWindow) {
+		window += "~"
+	}
+	lines := []string{renderStyled("WINDOW "+window, st.outcomeWindow, st)}
 	engine := row.EngineOutcomes[m.outcomeWindow]
 	http := row.HTTPOutcomes[m.outcomeWindow]
 	if len(engine) == 0 && len(http) == 0 {
 		lines = append(lines, "outcomes unavailable")
 	}
 	if len(engine) > 0 {
-		lines = append(lines, "ENGINE FINISHES")
-		for _, out := range engine {
-			reason := out.Reason
-			if reason == "" {
-				reason = "reason unavailable"
-			}
-			lines = append(lines, fmt.Sprintf("  %-30s %10s", truncatePlainCells(reason, 30), formatMetricValue(out.Count, "count")))
-		}
+		lines = append(lines, renderStyled("ENGINE FINISHES", st.section, st))
+		lines = append(lines, engineOutcomeTable(engine, m.width, st)...)
 	}
 	if len(http) > 0 {
 		if len(lines) > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, "HTTP")
-		for _, out := range http {
-			status := out.Status
-			if status == "" {
-				status = "status unavailable"
-			}
-			target := strings.TrimSpace(strings.Join(nonEmpty(out.Method, out.Handler), " "))
-			if target == "" {
-				target = "handler unavailable"
-			}
-			lines = append(lines, fmt.Sprintf("  %-10s %-32s %10s", truncatePlainCells(status, 10), truncatePlainCells(target, 32), formatMetricValue(out.Count, "count")))
-		}
+		lines = append(lines, renderStyled("HTTP", st.section, st))
+		lines = append(lines, httpOutcomeTable(http, m.width, st)...)
 	}
 	return lines
+}
+
+func engineOutcomeTable(outcomes []domain.EngineOutcome, width int, st styles) []string {
+	columns := []tableColumn{
+		{ID: "reason", Header: "REASON", MinWidth: 8, PreferredWidth: 30, Priority: 0, Align: alignLeft, Flexible: true},
+		{ID: "count", Header: "COUNT", MinWidth: 7, PreferredWidth: 10, Priority: 0, Align: alignRight},
+	}
+	rows := make([][]tableCell, 0, len(outcomes))
+	for _, out := range outcomes {
+		reason := out.Reason
+		if reason == "" {
+			reason = "reason unavailable"
+		}
+		rows = append(rows, []tableCell{
+			{Text: reason},
+			{Text: formatMetricValue(out.Count, "count")},
+		})
+	}
+	lines, ok := renderCellTableWithOptions(columns, rows, width, st, tableOptions{
+		SelectedRow: -1,
+		RowStyle: func(row int) lipgloss.Style {
+			return engineOutcomeStyle(outcomes[row].Reason, st)
+		},
+	})
+	if ok {
+		return lines
+	}
+	return []string{"resize wider for engine outcome table"}
+}
+
+func httpOutcomeTable(outcomes []domain.HTTPOutcome, width int, st styles) []string {
+	columns := []tableColumn{
+		{ID: "status", Header: "STATUS", MinWidth: 6, PreferredWidth: 10, Priority: 0, Align: alignLeft},
+		{ID: "target", Header: "TARGET", MinWidth: 14, PreferredWidth: 48, Priority: 0, Align: alignLeft, Flexible: true},
+		{ID: "count", Header: "COUNT", MinWidth: 7, PreferredWidth: 10, Priority: 0, Align: alignRight},
+	}
+	rows := make([][]tableCell, 0, len(outcomes))
+	for _, out := range outcomes {
+		status := out.Status
+		if status == "" {
+			status = "status unavailable"
+		}
+		target := strings.TrimSpace(strings.Join(nonEmpty(out.Method, out.Handler), " "))
+		if target == "" {
+			target = "handler unavailable"
+		}
+		rows = append(rows, []tableCell{
+			{Text: status},
+			{Text: target},
+			{Text: formatMetricValue(out.Count, "count")},
+		})
+	}
+	lines, ok := renderCellTableWithOptions(columns, rows, width, st, tableOptions{
+		SelectedRow: -1,
+		RowStyle: func(row int) lipgloss.Style {
+			return httpOutcomeStyle(outcomes[row].Status, st)
+		},
+	})
+	if ok {
+		return lines
+	}
+	return []string{"resize wider for HTTP outcome table"}
+}
+
+func engineOutcomeStyle(reason string, st styles) lipgloss.Style {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "stop", "eos":
+		return st.good
+	case "abort", "length":
+		return st.bad
+	case "":
+		return st.warn
+	default:
+		return lipgloss.Style{}
+	}
+}
+
+func httpOutcomeStyle(status string, st styles) lipgloss.Style {
+	switch httpStatusClass(status) {
+	case 2:
+		return st.good
+	case 4, 5:
+		return st.bad
+	default:
+		return lipgloss.Style{}
+	}
+}
+
+func httpStatusClass(status string) int {
+	status = strings.ToLower(strings.TrimSpace(status))
+	if len(status) == 0 || status[0] < '1' || status[0] > '5' {
+		return 0
+	}
+	if len(status) == 3 && status[1:] == "xx" {
+		return int(status[0] - '0')
+	}
+	if len(status) >= 3 {
+		code, err := strconv.Atoi(status[:3])
+		if err == nil && code >= 100 && code <= 599 {
+			return code / 100
+		}
+	}
+	return 0
+}
+
+func renderStyled(text string, style lipgloss.Style, st styles) string {
+	if st.noColor {
+		return text
+	}
+	return style.Render(text)
 }
 
 func outcomeWindowPartial(row domain.ModelSnapshot, window time.Duration) bool {
