@@ -127,7 +127,10 @@ names, for example `Requests running`, without an added `req` suffix.
 
 Request outcomes are kept separate so that a normal length-limited completion,
 a client abort, and an HTTP server error are not mashed into one misleading
-number:
+number. The 1m, 5m, and 15m selections are rolling counts, not per-second
+rates. A `~` after the selected window means `gpttop` has not yet observed that
+window's full duration. The `all` selection is a reset-safe cumulative count
+observed since `gpttop` started:
 
 ```text
 Selected window: 5m
@@ -155,7 +158,7 @@ one.
 | `Up` / `Down`, `j` / `k` | Select an overview row; scroll details when needed |
 | `Enter` | Open or close endpoint details |
 | `Esc` | Return to overview or close help |
-| `1` / `5` / `0` | Select 1m / 5m / 15m outcome window |
+| `1` / `2` / `3` / `4` | Select 1m / 5m / 15m / all-time outcomes |
 | `o` | Open request outcome breakdown |
 | `m` | Toggle endpoint and model-grouped overview |
 | `r` | Force an immediate scrape |

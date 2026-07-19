@@ -38,6 +38,9 @@ func TestBuildSnapshotDerivesEndpointModelRow(t *testing.T) {
 	if row.Model != "llama" {
 		t.Fatalf("model = %q", row.Model)
 	}
+	if row.ObservationDuration != 10*time.Second {
+		t.Fatalf("observation duration = %s, want 10s", row.ObservationDuration)
+	}
 	assertWindow(t, "rps", row.Overview.RPS, 3.7)
 	assertWindow(t, "running", row.Overview.Running, 3)
 	assertWindow(t, "prefix", row.Overview.PrefixHitRate, 50)
@@ -45,12 +48,14 @@ func TestBuildSnapshotDerivesEndpointModelRow(t *testing.T) {
 	assertWindow(t, "cpu", row.Overview.APICPU, 0.2)
 	assertWindow(t, "ttft p95", row.Overview.TTFTP95, 0.19)
 	assertWindow(t, "errors", row.Overview.Errors, 4)
-	if len(row.EngineOutcomes[10*time.Second]) == 0 {
+	if len(row.EngineOutcomes[time.Minute]) == 0 {
 		t.Fatal("engine outcomes missing")
 	}
-	if len(row.HTTPOutcomes[10*time.Second]) == 0 {
+	if len(row.HTTPOutcomes[time.Minute]) == 0 {
 		t.Fatal("http outcomes missing")
 	}
+	assertOutcomeCount(t, "all-time engine stop", row.EngineOutcomes[domain.OutcomeAllTime], "stop", 30)
+	assertHTTPOutcomeCount(t, "all-time HTTP 200", row.HTTPOutcomes[domain.OutcomeAllTime], "200", 34)
 }
 
 func TestBuildSnapshotMarksMissingUnavailable(t *testing.T) {
@@ -264,6 +269,28 @@ func assertWindow(t *testing.T, name string, got domain.WindowValue, want float6
 	if diff := got.Value - want; diff > 1e-9 || diff < -1e-9 {
 		t.Fatalf("%s = %f want %f", name, got.Value, want)
 	}
+}
+
+func assertOutcomeCount(t *testing.T, name string, outcomes []domain.EngineOutcome, reason string, want float64) {
+	t.Helper()
+	for _, outcome := range outcomes {
+		if outcome.Reason == reason {
+			assertWindow(t, name, outcome.Count, want)
+			return
+		}
+	}
+	t.Fatalf("%s missing reason %q: %#v", name, reason, outcomes)
+}
+
+func assertHTTPOutcomeCount(t *testing.T, name string, outcomes []domain.HTTPOutcome, status string, want float64) {
+	t.Helper()
+	for _, outcome := range outcomes {
+		if outcome.Status == status {
+			assertWindow(t, name, outcome.Count, want)
+			return
+		}
+	}
+	t.Fatalf("%s missing status %q: %#v", name, status, outcomes)
 }
 
 const firstMetrics = `# TYPE vllm:num_requests_running gauge

@@ -219,10 +219,12 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.restoreSelectedKey(key)
 	case "1":
 		m.outcomeWindow = time.Minute
-	case "5":
+	case "2":
 		m.outcomeWindow = 5 * time.Minute
-	case "0":
+	case "3":
 		m.outcomeWindow = 15 * time.Minute
+	case "4":
+		m.outcomeWindow = domain.OutcomeAllTime
 	case "r":
 		m.lastOp = OperationalMsg{At: time.Now(), Level: "info", Message: "refresh requested"}
 		if m.opts.Refresh != nil {

@@ -317,7 +317,15 @@ func sortedWindows[T any](m map[time.Duration][]T) []time.Duration {
 	for window := range m {
 		windows = append(windows, window)
 	}
-	sort.Slice(windows, func(i, j int) bool { return windows[i] < windows[j] })
+	sort.Slice(windows, func(i, j int) bool {
+		if windows[i] == domain.OutcomeAllTime {
+			return false
+		}
+		if windows[j] == domain.OutcomeAllTime {
+			return true
+		}
+		return windows[i] < windows[j]
+	})
 	return windows
 }
 

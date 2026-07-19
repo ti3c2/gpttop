@@ -15,6 +15,7 @@ const (
 	DefaultHistory       = 20 * time.Minute
 	DefaultBodyLimit     = 32 << 20
 	DefaultSeriesGrace   = 30 * time.Second
+	OutcomeAllTime       = time.Duration(0)
 )
 
 var DefaultWindows = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}
@@ -182,6 +183,13 @@ type RawSample struct {
 	Recognized   bool
 }
 
+// OutcomeCounterTotal is a reset-safe counter increase observed since gpttop started.
+type OutcomeCounterTotal struct {
+	Series   SeriesPoint
+	Delta    float64
+	Coverage time.Duration
+}
+
 type ScrapeStatus struct {
 	EndpointName       string
 	MetricsURL         string
@@ -285,6 +293,7 @@ type ModelSnapshot struct {
 	State               State
 	LastSuccess         time.Time
 	SampleAge           time.Duration
+	ObservationDuration time.Duration
 	ScrapeDuration      time.Duration
 	ConsecutiveFailures int
 	LastError           string
@@ -310,7 +319,7 @@ type SnapshotProvider interface {
 func DurationLabel(d time.Duration) string {
 	switch d {
 	case 0:
-		return "now"
+		return "all"
 	case time.Minute:
 		return "1m"
 	case 5 * time.Minute:

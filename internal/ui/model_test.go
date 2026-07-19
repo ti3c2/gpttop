@@ -80,13 +80,46 @@ func TestOutcomeWindowKeysAndPlotKeysNoop(t *testing.T) {
 	if strings.Contains(view, "plot") || strings.Contains(view, "[/]") {
 		t.Fatalf("detail advertised plot behavior:\n%s", view)
 	}
-	m = press(t, m, "5")
+	m = press(t, m, "2")
 	if m.OutcomeWindow() != 5*time.Minute {
 		t.Fatalf("outcome window = %s, want 5m", m.OutcomeWindow())
 	}
-	m = press(t, m, "0")
+	m = press(t, m, "3")
 	if m.OutcomeWindow() != 15*time.Minute {
 		t.Fatalf("outcome window = %s, want 15m", m.OutcomeWindow())
+	}
+	m = press(t, m, "4")
+	if m.OutcomeWindow() != domain.OutcomeAllTime {
+		t.Fatalf("outcome window = %s, want all time", m.OutcomeWindow())
+	}
+	m = press(t, m, "o")
+	view = m.View()
+	for _, want := range []string{"window all", "1/2/3/4 window"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("all-time outcome view missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "counts observed since gpttop started") {
+		t.Fatalf("all-time outcome view contains removed explanatory text:\n%s", view)
+	}
+}
+
+func TestOutcomeTitleMarksPartialWindow(t *testing.T) {
+	snap := testSnapshot(false)
+	window := 15 * time.Minute
+	snap.Rows[0].EngineOutcomes[window][0].Count = domain.Value(42, "count", window, 5*time.Minute)
+	m := NewModel(nil, Options{NoColor: true, InitialWidth: 120, InitialHeight: 40})
+	m = updateModel(t, m, SnapshotMsg{Snapshot: snap})
+	m = press(t, m, "o")
+	m = press(t, m, "3")
+	if view := m.View(); !strings.Contains(view, "window 15m~") {
+		t.Fatalf("partial outcome window is not marked:\n%s", view)
+	}
+
+	snap.Rows[0].EngineOutcomes[window][0].Count = domain.Value(42, "count", window, window)
+	m = updateModel(t, m, UpdateMsg{Snapshot: snap})
+	if view := m.View(); strings.Contains(view, "window 15m~") {
+		t.Fatalf("full outcome window is marked partial:\n%s", view)
 	}
 }
 
@@ -521,6 +554,7 @@ func testRow(now time.Time, endpoint, model string, state domain.State, unsuppor
 		State:               state,
 		LastSuccess:         now.Add(-2 * time.Second),
 		SampleAge:           2 * time.Second,
+		ObservationDuration: 20 * time.Minute,
 		ScrapeDuration:      45 * time.Millisecond,
 		ConsecutiveFailures: failureCount(state),
 		LastError:           errorForState(state),
@@ -540,6 +574,9 @@ func testRow(now time.Time, endpoint, model string, state domain.State, unsuppor
 		},
 		Metrics: metricRows,
 		EngineOutcomes: map[time.Duration][]domain.EngineOutcome{
+			domain.OutcomeAllTime: {
+				{Reason: "stop", Count: domain.Value(32400, "count", domain.OutcomeAllTime, 30*time.Minute)},
+			},
 			one: {
 				{Reason: "stop", Count: domain.Value(1080, "count", one, one)},
 				{Reason: "", Count: domain.Value(1, "count", one, one)},
@@ -552,6 +589,9 @@ func testRow(now time.Time, endpoint, model string, state domain.State, unsuppor
 			},
 		},
 		HTTPOutcomes: map[time.Duration][]domain.HTTPOutcome{
+			domain.OutcomeAllTime: {
+				{Status: "2xx", Method: "POST", Handler: "/v1/chat/completions", Count: domain.Value(32400, "count", domain.OutcomeAllTime, 30*time.Minute)},
+			},
 			one: {
 				{Status: "2xx", Method: "POST", Handler: "/v1/chat/completions", Count: domain.Value(1080, "count", one, one)},
 			},

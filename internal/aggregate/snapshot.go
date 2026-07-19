@@ -33,9 +33,11 @@ func BuildSnapshot(store *history.Store, config domain.RuntimeConfig, now time.T
 	}
 	samplesByEndpoint := map[string][]domain.RawSample{}
 	statuses := map[string]domain.ScrapeStatus{}
+	outcomeTotalsByEndpoint := map[string][]domain.OutcomeCounterTotal{}
 	if store != nil {
 		samplesByEndpoint = store.AllSamples()
 		statuses = store.Statuses()
+		outcomeTotalsByEndpoint = store.AllOutcomeTotals()
 	}
 
 	endpoints := configuredEndpoints(config, samplesByEndpoint, statuses)
@@ -47,7 +49,7 @@ func BuildSnapshot(store *history.Store, config domain.RuntimeConfig, now time.T
 			models = []string{domain.ModelName(nil, target.Model)}
 		}
 		for _, model := range models {
-			rows = append(rows, buildModelSnapshot(samples, statuses[target.Name], target, model, len(models), config, now))
+			rows = append(rows, buildModelSnapshot(samples, outcomeTotalsByEndpoint[target.Name], statuses[target.Name], target, model, len(models), config, now))
 		}
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
@@ -113,7 +115,7 @@ func configuredEndpoints(config domain.RuntimeConfig, samples map[string][]domai
 	return endpoints
 }
 
-func buildModelSnapshot(samples []domain.RawSample, status domain.ScrapeStatus, target domain.EndpointConfig, model string, modelCount int, config domain.RuntimeConfig, now time.Time) domain.ModelSnapshot {
+func buildModelSnapshot(samples []domain.RawSample, outcomeTotals []domain.OutcomeCounterTotal, status domain.ScrapeStatus, target domain.EndpointConfig, model string, modelCount int, config domain.RuntimeConfig, now time.Time) domain.ModelSnapshot {
 	sort.SliceStable(samples, func(i, j int) bool {
 		return samples[i].At.Before(samples[j].At)
 	})
@@ -147,6 +149,9 @@ func buildModelSnapshot(samples []domain.RawSample, status domain.ScrapeStatus, 
 		row.SampleAge = now.Sub(samples[len(samples)-1].At)
 		row.LastSuccess = samples[len(samples)-1].At
 	}
+	if len(samples) > 1 {
+		row.ObservationDuration = samples[len(samples)-1].At.Sub(samples[0].At)
+	}
 	row.Restarted = restarted(samples)
 
 	windows := displayWindows(config)
@@ -178,9 +183,9 @@ func buildModelSnapshot(samples []domain.RawSample, status domain.ScrapeStatus, 
 		row.Warnings = append(row.Warnings, "prefix-cache hit uses a legacy gauge; it is not counter-window semantics")
 	}
 	row.Overview = overviewFromRows(row.Metrics, samples, model, target.Model, modelCount, config.CurrentWindow)
-	row.EngineOutcomes = engineOutcomes(samples, model, target.Model, config.CurrentWindow, windows)
+	row.EngineOutcomes = engineOutcomes(samples, outcomeTotals, model, target.Model)
 	if modelCount == 1 {
-		row.HTTPOutcomes = httpOutcomes(samples, config.CurrentWindow, windows)
+		row.HTTPOutcomes = httpOutcomes(samples, outcomeTotals)
 	}
 	return row
 }
@@ -430,9 +435,10 @@ func histogramSeries(samples []domain.RawSample, model, configured string, seman
 	return out
 }
 
-func engineOutcomes(samples []domain.RawSample, model, configured string, currentWindow time.Duration, windows []time.Duration) map[time.Duration][]domain.EngineOutcome {
-	durations := append([]time.Duration{currentWindow}, windows...)
+func engineOutcomes(samples []domain.RawSample, totals []domain.OutcomeCounterTotal, model, configured string) map[time.Duration][]domain.EngineOutcome {
+	durations := []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}
 	out := map[time.Duration][]domain.EngineOutcome{}
+	restarts := restartMap(samples)
 	for _, window := range durations {
 		groups := map[string]map[string][]derive.TimedValue{}
 		for _, sample := range samples {
@@ -450,7 +456,7 @@ func engineOutcomes(samples []domain.RawSample, model, configured string, curren
 				groups[reason][series.ID()] = append(groups[reason][series.ID()], derive.TimedValue{
 					At:      sample.At,
 					Value:   series.Value,
-					Restart: restartMap(samples)[sample.At],
+					Restart: restarts[sample.At],
 				})
 			}
 		}
@@ -469,11 +475,12 @@ func engineOutcomes(samples []domain.RawSample, model, configured string, curren
 		})
 		out[window] = values
 	}
+	out[domain.OutcomeAllTime] = engineOutcomeTotals(totals, model, configured)
 	return out
 }
 
-func httpOutcomes(samples []domain.RawSample, currentWindow time.Duration, windows []time.Duration) map[time.Duration][]domain.HTTPOutcome {
-	durations := append([]time.Duration{currentWindow}, windows...)
+func httpOutcomes(samples []domain.RawSample, totals []domain.OutcomeCounterTotal) map[time.Duration][]domain.HTTPOutcome {
+	durations := []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}
 	out := map[time.Duration][]domain.HTTPOutcome{}
 	restarts := restartMap(samples)
 	for _, window := range durations {
@@ -521,7 +528,87 @@ func httpOutcomes(samples []domain.RawSample, currentWindow time.Duration, windo
 		})
 		out[window] = values
 	}
+	out[domain.OutcomeAllTime] = httpOutcomeTotals(totals)
 	return out
+}
+
+func engineOutcomeTotals(totals []domain.OutcomeCounterTotal, model, configured string) []domain.EngineOutcome {
+	type total struct {
+		delta    float64
+		coverage time.Duration
+	}
+	groups := map[string]total{}
+	for _, counter := range totals {
+		series := counter.Series
+		if series.Semantic != domain.SemanticCompletionOutcomes || !modelMatches(series.Labels, model, configured) {
+			continue
+		}
+		reason := series.Labels["finished_reason"]
+		if reason == "" {
+			reason = "reason unavailable"
+		}
+		group := groups[reason]
+		group.delta += counter.Delta
+		if counter.Coverage > group.coverage {
+			group.coverage = counter.Coverage
+		}
+		groups[reason] = group
+	}
+	values := make([]domain.EngineOutcome, 0, len(groups))
+	for reason, group := range groups {
+		values = append(values, domain.EngineOutcome{
+			Reason: reason,
+			Count:  domain.Value(group.delta, unitCount, domain.OutcomeAllTime, group.coverage),
+		})
+	}
+	sort.Slice(values, func(i, j int) bool {
+		if values[i].Count.Value == values[j].Count.Value {
+			return values[i].Reason < values[j].Reason
+		}
+		return values[i].Count.Value > values[j].Count.Value
+	})
+	return values
+}
+
+func httpOutcomeTotals(totals []domain.OutcomeCounterTotal) []domain.HTTPOutcome {
+	type total struct {
+		labels   domain.LabelSet
+		delta    float64
+		coverage time.Duration
+	}
+	groups := map[string]total{}
+	for _, counter := range totals {
+		series := counter.Series
+		if series.Semantic != domain.SemanticHTTPOutcomes || isMetricsHandler(series.Labels["handler"]) {
+			continue
+		}
+		key := series.Labels["status"] + "\xff" + series.Labels["method"] + "\xff" + series.Labels["handler"]
+		group := groups[key]
+		if group.labels == nil {
+			group.labels = series.Labels.Clone()
+		}
+		group.delta += counter.Delta
+		if counter.Coverage > group.coverage {
+			group.coverage = counter.Coverage
+		}
+		groups[key] = group
+	}
+	values := make([]domain.HTTPOutcome, 0, len(groups))
+	for _, group := range groups {
+		values = append(values, domain.HTTPOutcome{
+			Status:  group.labels["status"],
+			Method:  group.labels["method"],
+			Handler: group.labels["handler"],
+			Count:   domain.Value(group.delta, unitCount, domain.OutcomeAllTime, group.coverage),
+		})
+	}
+	sort.Slice(values, func(i, j int) bool {
+		if values[i].Count.Value == values[j].Count.Value {
+			return values[i].Status+values[i].Method+values[i].Handler < values[j].Status+values[j].Method+values[j].Handler
+		}
+		return values[i].Count.Value > values[j].Count.Value
+	})
+	return values
 }
 
 func overviewFromRows(rows []domain.MetricRow, samples []domain.RawSample, model, configured string, modelCount int, currentWindow time.Duration) domain.OverviewValues {

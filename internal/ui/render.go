@@ -42,7 +42,7 @@ var keyBindings = []keyBinding{
 	{Keys: "esc", Action: "overview", Detail: true, Outcomes: true},
 	{Keys: "esc", Action: "close help", Help: true},
 	{Keys: "o", Action: "outcomes", Overview: true, Detail: true},
-	{Keys: "1/5/0", Action: "outcome window", Detail: true, Outcomes: true},
+	{Keys: "1/2/3/4", Action: "outcome window", Detail: true, Outcomes: true},
 	{Keys: "m", Action: "group", Overview: true},
 	{Keys: "r", Action: "refresh", Overview: true, Detail: true, Outcomes: true},
 	{Keys: "?", Action: "help", Overview: true, Detail: true, Outcomes: true, Help: true},
@@ -368,7 +368,11 @@ func outcomesTitle(m Model) string {
 	if row == nil {
 		return overviewTitle(m)
 	}
-	return fmt.Sprintf("gpttop | outcomes | %s @ %s | window %s", displayModel(*row), displayEndpoint(*row), domain.DurationLabel(m.outcomeWindow))
+	window := domain.DurationLabel(m.outcomeWindow)
+	if outcomeWindowPartial(*row, m.outcomeWindow) {
+		window += "~"
+	}
+	return fmt.Sprintf("gpttop | outcomes | %s @ %s | window %s", displayModel(*row), displayEndpoint(*row), window)
 }
 
 func outcomesBody(m Model, st styles) []string {
@@ -410,6 +414,26 @@ func outcomesBody(m Model, st styles) []string {
 		}
 	}
 	return lines
+}
+
+func outcomeWindowPartial(row domain.ModelSnapshot, window time.Duration) bool {
+	if window == domain.OutcomeAllTime {
+		return false
+	}
+	if row.ObservationDuration+time.Millisecond < window {
+		return true
+	}
+	for _, outcome := range row.EngineOutcomes[window] {
+		if outcome.Count.Available && outcome.Count.Partial {
+			return true
+		}
+	}
+	for _, outcome := range row.HTTPOutcomes[window] {
+		if outcome.Count.Available && outcome.Count.Partial {
+			return true
+		}
+	}
+	return false
 }
 
 func helpLines(m Model, st styles) []string {

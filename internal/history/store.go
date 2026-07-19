@@ -10,10 +10,28 @@ import (
 
 // Store keeps bounded in-memory scrape samples and scrape health status.
 type Store struct {
-	mu        sync.RWMutex
-	retention time.Duration
-	samples   map[string][]domain.RawSample
-	statuses  map[string]domain.ScrapeStatus
+	mu              sync.RWMutex
+	retention       time.Duration
+	samples         map[string][]domain.RawSample
+	statuses        map[string]domain.ScrapeStatus
+	outcomeTrackers map[string]*outcomeTracker
+}
+
+type outcomeTracker struct {
+	lastAt           time.Time
+	processStart     float64
+	haveProcessStart bool
+	generation       uint64
+	counters         map[string]*outcomeCounter
+}
+
+type outcomeCounter struct {
+	series     domain.SeriesPoint
+	firstAt    time.Time
+	lastAt     time.Time
+	lastValue  float64
+	delta      float64
+	generation uint64
 }
 
 // NewStore creates a store with the configured retention duration.
@@ -22,9 +40,10 @@ func NewStore(retention time.Duration) *Store {
 		retention = domain.DefaultHistory
 	}
 	return &Store{
-		retention: retention,
-		samples:   make(map[string][]domain.RawSample),
-		statuses:  make(map[string]domain.ScrapeStatus),
+		retention:       retention,
+		samples:         make(map[string][]domain.RawSample),
+		statuses:        make(map[string]domain.ScrapeStatus),
+		outcomeTrackers: make(map[string]*outcomeTracker),
 	}
 }
 
@@ -47,11 +66,35 @@ func (s *Store) AddSample(sample *domain.RawSample) {
 	}
 	key := sample.EndpointName
 	cp := cloneSample(*sample)
+	s.addOutcomeSampleLocked(cp)
 	s.samples[key] = append(s.samples[key], cp)
 	sort.SliceStable(s.samples[key], func(i, j int) bool {
 		return s.samples[key][i].At.Before(s.samples[key][j].At)
 	})
 	s.evictLocked(key, cp.At)
+}
+
+// AllOutcomeTotals returns reset-safe outcome counter increases observed since
+// each endpoint's first successful sample.
+func (s *Store) AllOutcomeTotals() map[string][]domain.OutcomeCounterTotal {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string][]domain.OutcomeCounterTotal, len(s.outcomeTrackers))
+	for endpoint, tracker := range s.outcomeTrackers {
+		totals := make([]domain.OutcomeCounterTotal, 0, len(tracker.counters))
+		for _, counter := range tracker.counters {
+			totals = append(totals, domain.OutcomeCounterTotal{
+				Series:   cloneSeries(counter.series),
+				Delta:    counter.delta,
+				Coverage: counter.lastAt.Sub(counter.firstAt),
+			})
+		}
+		sort.Slice(totals, func(i, j int) bool {
+			return totals[i].Series.ID() < totals[j].Series.ID()
+		})
+		out[endpoint] = totals
+	}
+	return out
 }
 
 // AddStatus records the latest scrape status for an endpoint.
@@ -114,6 +157,61 @@ func (s *Store) evictLocked(endpointName string, now time.Time) {
 	if keep > 0 {
 		s.samples[endpointName] = append([]domain.RawSample(nil), samples[keep:]...)
 	}
+}
+
+func (s *Store) addOutcomeSampleLocked(sample domain.RawSample) {
+	if s.outcomeTrackers == nil {
+		s.outcomeTrackers = make(map[string]*outcomeTracker)
+	}
+	tracker := s.outcomeTrackers[sample.EndpointName]
+	if tracker == nil {
+		tracker = &outcomeTracker{counters: make(map[string]*outcomeCounter)}
+		s.outcomeTrackers[sample.EndpointName] = tracker
+	}
+	if !tracker.lastAt.IsZero() && !sample.At.After(tracker.lastAt) {
+		return
+	}
+	if sample.ProcessStart != nil {
+		if tracker.haveProcessStart && tracker.processStart != *sample.ProcessStart {
+			tracker.generation++
+		}
+		tracker.processStart = *sample.ProcessStart
+		tracker.haveProcessStart = true
+	}
+	for _, series := range sample.Series {
+		if !isOutcomeCounter(series) || !domain.IsFinite(series.Value) {
+			continue
+		}
+		id := series.ID()
+		counter := tracker.counters[id]
+		if counter == nil {
+			tracker.counters[id] = &outcomeCounter{
+				series:     cloneSeries(series),
+				firstAt:    sample.At,
+				lastAt:     sample.At,
+				lastValue:  series.Value,
+				generation: tracker.generation,
+			}
+			continue
+		}
+		if counter.generation == tracker.generation && series.Value >= counter.lastValue {
+			counter.delta += series.Value - counter.lastValue
+		}
+		counter.series = cloneSeries(series)
+		counter.lastAt = sample.At
+		counter.lastValue = series.Value
+		counter.generation = tracker.generation
+	}
+	tracker.lastAt = sample.At
+}
+
+func isOutcomeCounter(series domain.SeriesPoint) bool {
+	return series.Semantic == domain.SemanticCompletionOutcomes || series.Semantic == domain.SemanticHTTPOutcomes
+}
+
+func cloneSeries(series domain.SeriesPoint) domain.SeriesPoint {
+	series.Labels = series.Labels.Clone()
+	return series
 }
 
 func cloneSamples(samples []domain.RawSample) []domain.RawSample {

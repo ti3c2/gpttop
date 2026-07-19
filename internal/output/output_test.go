@@ -45,6 +45,7 @@ func TestJSONStableAndMissingValuesAreNull(t *testing.T) {
 		`"sanitized_url": "https://example.test/metrics"`,
 		`"running": null`,
 		`"window": "1m"`,
+		`"window": "all"`,
 		`"reason": "stop"`,
 		`"status": "5xx"`,
 		`"partial": true`,
@@ -119,10 +120,12 @@ func testSnapshot() domain.AppSnapshot {
 				MaxFifteen: domain.Value(4.8, "/s", 15*time.Minute, 10*time.Minute),
 			}},
 			EngineOutcomes: map[time.Duration][]domain.EngineOutcome{
-				time.Minute: {{Reason: "stop", Count: domain.Value(42, "", time.Minute, time.Minute)}},
+				domain.OutcomeAllTime: {{Reason: "stop", Count: domain.Value(84, "", domain.OutcomeAllTime, 2*time.Minute)}},
+				time.Minute:           {{Reason: "stop", Count: domain.Value(42, "", time.Minute, time.Minute)}},
 			},
 			HTTPOutcomes: map[time.Duration][]domain.HTTPOutcome{
-				time.Minute: {{Status: "5xx", Method: "POST", Handler: "/v1/chat/completions", Count: domain.Value(1, "", time.Minute, time.Minute)}},
+				domain.OutcomeAllTime: {{Status: "5xx", Method: "POST", Handler: "/v1/chat/completions", Count: domain.Value(2, "", domain.OutcomeAllTime, 2*time.Minute)}},
+				time.Minute:           {{Status: "5xx", Method: "POST", Handler: "/v1/chat/completions", Count: domain.Value(1, "", time.Minute, time.Minute)}},
 			},
 		}},
 	}
