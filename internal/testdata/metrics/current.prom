@@ -1,0 +1,55 @@
+# HELP vllm:num_requests_running Running requests.
+# TYPE vllm:num_requests_running gauge
+vllm:num_requests_running{model_name="llama",engine="0"} 3
+vllm:num_requests_running{model_name="llama",engine="1"} 4
+vllm:num_requests_running{model_name="other",engine="0"} 1
+# HELP vllm:num_requests_waiting Waiting requests.
+# TYPE vllm:num_requests_waiting gauge
+vllm:num_requests_waiting{model_name="llama",engine="0"} 2
+# HELP vllm:prompt_tokens_total Prompt tokens.
+# TYPE vllm:prompt_tokens_total counter
+vllm:prompt_tokens_total{model_name="llama",engine="0"} 1100
+vllm:prompt_tokens_created{model_name="llama",engine="0"} 1.7e+09
+# HELP vllm:generation_tokens Total generation tokens.
+# TYPE vllm:generation_tokens counter
+vllm:generation_tokens{model_name="llama",engine="0"} 220
+# HELP vllm:prefix_cache_hits_total Prefix cache hits.
+# TYPE vllm:prefix_cache_hits_total counter
+vllm:prefix_cache_hits_total{model_name="llama",engine="0"} 30
+# HELP vllm:prefix_cache_queries_total Prefix cache queries.
+# TYPE vllm:prefix_cache_queries_total counter
+vllm:prefix_cache_queries_total{model_name="llama",engine="0"} 60
+# HELP vllm:kv_cache_usage_perc KV cache usage.
+# TYPE vllm:kv_cache_usage_perc gauge
+vllm:kv_cache_usage_perc{model_name="llama",engine="0"} 0.75
+# HELP vllm:request_success_total Request successes.
+# TYPE vllm:request_success_total counter
+vllm:request_success_total{model_name="llama",finished_reason="stop"} 130
+vllm:request_success_total{model_name="llama",finished_reason="length"} 5
+# HELP http_requests_total HTTP requests.
+# TYPE http_requests_total counter
+http_requests_total{status="200",method="POST",handler="/v1/chat/completions"} 140
+http_requests_total{status="500",method="POST",handler="/v1/chat/completions"} 1
+http_requests_total{status="4xx",method="GET",handler="none",note="escaped\nquote\"slash\\"} 2
+# HELP vllm:unknown_metric_total Unknown metric ignored by gpttop.
+# TYPE vllm:unknown_metric_total counter
+vllm:unknown_metric_total{model_name="llama"} 123
+# HELP process_cpu_seconds_total CPU.
+# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total 42
+# HELP process_start_time_seconds Start time.
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds 1700000000
+# HELP vllm:time_to_first_token_seconds TTFT.
+# TYPE vllm:time_to_first_token_seconds histogram
+vllm:time_to_first_token_seconds_bucket{model_name="llama",le="0.1"} 10
+vllm:time_to_first_token_seconds_bucket{model_name="llama",le="0.2"} 20
+vllm:time_to_first_token_seconds_bucket{model_name="llama",le="+Inf"} 20
+vllm:time_to_first_token_seconds_sum{model_name="llama"} 3
+vllm:time_to_first_token_seconds_count{model_name="llama"} 20
+# HELP vllm:num_preemptions_total Preemptions.
+# TYPE vllm:num_preemptions_total counter
+vllm:num_preemptions_total{model_name="llama"} 2
+# HELP vllm:corrupted_requests_total Corrupted requests.
+# TYPE vllm:corrupted_requests_total counter
+vllm:corrupted_requests_total{model_name="llama"} 1

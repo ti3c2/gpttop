@@ -1,0 +1,13 @@
+# HELP vllm:gpu_cache_usage_perc Legacy GPU cache usage.
+# TYPE vllm:gpu_cache_usage_perc gauge
+vllm:gpu_cache_usage_perc{model_name="legacy"} 0.5
+# HELP vllm:gpu_prefix_cache_hit_rate Legacy prefix cache hit rate.
+# TYPE vllm:gpu_prefix_cache_hit_rate gauge
+vllm:gpu_prefix_cache_hit_rate{model_name="legacy"} 0.25
+# HELP vllm:time_per_output_token_seconds Legacy output token latency.
+# TYPE vllm:time_per_output_token_seconds histogram
+vllm:time_per_output_token_seconds_bucket{model_name="legacy",le="0.01"} 1
+vllm:time_per_output_token_seconds_bucket{model_name="legacy",le="0.02"} 2
+vllm:time_per_output_token_seconds_bucket{model_name="legacy",le="+Inf"} 2
+vllm:time_per_output_token_seconds_sum{model_name="legacy"} 0.03
+vllm:time_per_output_token_seconds_count{model_name="legacy"} 2

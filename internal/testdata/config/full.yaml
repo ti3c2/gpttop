@@ -1,0 +1,13 @@
+refresh_interval: 5s
+scrape_timeout: 4s
+current_window: 12s
+history: 30m
+windows: [1m, 10m]
+endpoints:
+  - name: ${ENDPOINT_NAME}
+    url: https://user:${URL_PASSWORD}@example.test:8443/base?api_key=${API_KEY}&debug=1
+    metrics_path: metrics
+    model: ${MODEL_NAME}
+    headers:
+      Authorization: "Bearer ${AUTH_TOKEN}"
+      X-Trace-ID: trace-123
