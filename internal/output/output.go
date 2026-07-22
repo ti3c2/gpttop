@@ -16,13 +16,13 @@ import (
 
 func WriteTable(w io.Writer, snapshot domain.AppSnapshot) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "ENDPOINT\tMODEL\tSTATE\tRPS(req/s)\tRUN(req)\tWAIT(req)\tPROMPT(tok/s)\tGEN(tok/s)\tKV(%)\tHIT(%)\tTTFT95(s)\tE2E95(s)\tERR(count)\tAGE"); err != nil {
+	if _, err := fmt.Fprintln(tw, "ENDPOINT\tMODEL\tSTATE\tRPS(req/s)\tRUN(req)\tWAIT(req)\tPROMPT(tok/s)\tGEN(tok/s)\tKV(%)\tHIT(%)\tTTFT95(s)\tE2E95(s)\tERR(count)"); err != nil {
 		return err
 	}
 	for _, row := range snapshot.Rows {
 		if _, err := fmt.Fprintf(
 			tw,
-			"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			row.EndpointName,
 			row.Model,
 			row.State,
@@ -36,7 +36,6 @@ func WriteTable(w io.Writer, snapshot domain.AppSnapshot) error {
 			formatValue(row.Overview.TTFTP95),
 			formatValue(row.Overview.E2EP95),
 			formatValue(row.Overview.Errors),
-			formatAge(row.SampleAge),
 		); err != nil {
 			return err
 		}
@@ -92,8 +91,6 @@ type endpointJSON struct {
 
 type scrapeJSON struct {
 	LastSuccess         *string `json:"last_success"`
-	SampleAgeSeconds    float64 `json:"sample_age_seconds"`
-	DurationSeconds     float64 `json:"duration_seconds"`
 	ConsecutiveFailures int     `json:"consecutive_failures"`
 	LastError           string  `json:"last_error,omitempty"`
 	Restarted           bool    `json:"restarted"`
@@ -192,8 +189,6 @@ func rowToJSON(row domain.ModelSnapshot) rowJSON {
 		State: row.State,
 		Scrape: scrapeJSON{
 			LastSuccess:         optionalTime(row.LastSuccess),
-			SampleAgeSeconds:    seconds(row.SampleAge),
-			DurationSeconds:     seconds(row.ScrapeDuration),
 			ConsecutiveFailures: row.ConsecutiveFailures,
 			LastError:           row.LastError,
 			Restarted:           row.Restarted,
@@ -370,17 +365,4 @@ func formatValue(value domain.WindowValue) string {
 		}
 		return fmt.Sprintf("%s%.2f%s", prefix, value.Value, suffix)
 	}
-}
-
-func formatAge(age time.Duration) string {
-	if age <= 0 {
-		return "-"
-	}
-	if age < time.Second {
-		return fmt.Sprintf("%dms", age.Milliseconds())
-	}
-	if age < time.Minute {
-		return fmt.Sprintf("%ds", int(age/time.Second))
-	}
-	return fmt.Sprintf("%dm", int(age/time.Minute))
 }

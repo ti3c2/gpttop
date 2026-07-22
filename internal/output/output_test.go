@@ -22,7 +22,7 @@ func TestWriteTable(t *testing.T) {
 	if strings.Contains(table, "0.12~") {
 		t.Fatalf("table value contains per-cell partial marker:\n%s", table)
 	}
-	if strings.Contains(table, "120ms") || strings.Contains(table, "0.12s") {
+	if strings.Contains(table, "0.12s") {
 		t.Fatalf("table should keep units in headers, not cells:\n%s", table)
 	}
 }

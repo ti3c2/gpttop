@@ -263,20 +263,17 @@ func selectedStatusLines(m Model, st styles) []string {
 	}
 	lines := []string{""}
 	if m.width > 0 && m.width < 100 {
-		lines = append(lines, fmt.Sprintf("selected %s @ %s  %s  age %s  failures %d",
+		lines = append(lines, fmt.Sprintf("selected %s @ %s  %s  failures %d",
 			displayModel(*row),
 			displayEndpoint(*row),
 			stateText(*row, st),
-			formatDuration(row.SampleAge),
 			row.ConsecutiveFailures,
 		))
 	} else {
-		lines = append(lines, fmt.Sprintf("selected %s @ %s  %s  age %s  scrape %s  last %s  failures %d",
+		lines = append(lines, fmt.Sprintf("selected %s @ %s  %s  last %s  failures %d",
 			displayModel(*row),
 			displayEndpoint(*row),
 			stateText(*row, st),
-			formatDuration(row.SampleAge),
-			formatDuration(row.ScrapeDuration),
 			formatClock(row.LastSuccess),
 			row.ConsecutiveFailures,
 		))
@@ -299,10 +296,8 @@ func detailScreen(m Model, st styles) (string, []string, bool) {
 	lines := []string{
 		fmt.Sprintf("model %s", displayModel(*row)),
 		fmt.Sprintf("endpoint %s  url %s", displayEndpoint(*row), displayURL(*row)),
-		fmt.Sprintf("state %s  age %s  scrape %s  last_success %s  failures %d",
+		fmt.Sprintf("state %s  last_success %s  failures %d",
 			stateText(*row, st),
-			formatDuration(row.SampleAge),
-			formatDuration(row.ScrapeDuration),
 			formatClock(row.LastSuccess),
 			row.ConsecutiveFailures,
 		),
@@ -843,16 +838,6 @@ func formatNumberValue(v domain.WindowValue, unit string) string {
 		}
 		return fmt.Sprintf("%s%.2f%s", prefix, v.Value, suffix)
 	}
-}
-
-func formatDuration(d time.Duration) string {
-	if d <= 0 {
-		return "-"
-	}
-	if d < time.Second {
-		return d.Truncate(time.Millisecond).String()
-	}
-	return d.Truncate(time.Second).String()
 }
 
 func formatClock(t time.Time) string {
