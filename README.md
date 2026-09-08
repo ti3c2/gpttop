@@ -36,27 +36,92 @@ deltas inside each requested time window.
 - Support both current and legacy vLLM metric names through a semantic alias
   registry.
 - Provide interactive TUI, one-shot table, and JSON output modes.
-- Build into a self-contained executable with the included `Makefile`.
+- Download a self-contained Linux or macOS executable from GitHub Releases.
 - Run without a live server using a deterministic `--demo` mode.
+
+## Install a prebuilt binary
+
+Download an archive from [Releases](https://github.com/ti3c2/gpttop/releases).
+You do not need Go, Make, Python, CUDA, or a copy of this repository to run it.
+Each archive contains the `gpttop` executable and this README.
+
+| System | Platform | Latest release download |
+| --- | --- | --- |
+| Linux, Intel/AMD 64-bit (`x86_64`) | `linux-amd64` | [gpttop-linux-amd64.tar.gz](https://github.com/ti3c2/gpttop/releases/latest/download/gpttop-linux-amd64.tar.gz) |
+| Linux, ARM 64-bit (`aarch64` / `arm64`) | `linux-arm64` | [gpttop-linux-arm64.tar.gz](https://github.com/ti3c2/gpttop/releases/latest/download/gpttop-linux-arm64.tar.gz) |
+| macOS, Intel | `darwin-amd64` | [gpttop-darwin-amd64.tar.gz](https://github.com/ti3c2/gpttop/releases/latest/download/gpttop-darwin-amd64.tar.gz) |
+| macOS, Apple Silicon (M-series) | `darwin-arm64` | [gpttop-darwin-arm64.tar.gz](https://github.com/ti3c2/gpttop/releases/latest/download/gpttop-darwin-arm64.tar.gz) |
+
+Run `uname -sm` if you are unsure which platform to choose. Release downloads
+are populated when a version tag finishes CI; before the first release, use
+the [development builds](#development-builds) below.
+
+### Download and install
+
+Set `platform` to the value from the table (this example is for Apple Silicon).
+Run the following in Bash or Zsh. It downloads the latest stable release,
+verifies its SHA-256 checksum, and installs it for your user without `sudo`:
+
+```bash
+(
+  set -eu
+  platform=darwin-arm64
+  archive="gpttop-${platform}.tar.gz"
+  release_url=https://github.com/ti3c2/gpttop/releases/latest/download
+  download_dir="$(mktemp -d)"
+  trap 'rm -rf "$download_dir"' EXIT
+  cd "$download_dir"
+
+  curl -fLO "$release_url/$archive"
+  curl -fLO "$release_url/checksums.txt"
+  awk -v archive="$archive" '$2 == archive { print }' checksums.txt > selected-checksum.txt
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -c selected-checksum.txt
+  else
+    shasum -a 256 -c selected-checksum.txt
+  fi
+
+  tar -xzf "$archive"
+  mkdir -p "$HOME/.local/bin"
+  install -m 0755 "gpttop-${platform}/gpttop" "$HOME/.local/bin/gpttop"
+)
+export PATH="$HOME/.local/bin:$PATH"
+gpttop --version
+```
+
+Add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` or `~/.zshrc` to
+keep the command available in new terminals. To upgrade, stop `gpttop` and
+repeat the download/install commands. To install a specific version, set
+`release_url` to `https://github.com/ti3c2/gpttop/releases/download/v0.1.0`,
+replacing `v0.1.0` with the desired tag.
+
+If you downloaded an archive in your browser, extract it and run the executable
+directly, for example:
+
+```bash
+tar -xzf gpttop-darwin-arm64.tar.gz
+./gpttop-darwin-arm64/gpttop --demo
+```
+
+### Development builds
+
+Every successful push, pull request, or manual CI run also produces all four
+platform archives and `checksums.txt`. Open
+[Actions → ci](https://github.com/ti3c2/gpttop/actions/workflows/ci.yml), select
+the run for the commit you want, and download `gpttop-<commit SHA>` from
+**Artifacts**. GitHub requires you to sign in to download these artifacts;
+they are retained for 30 days. Unzip the artifact, then extract the `.tar.gz`
+for your platform and run the executable as above.
+
+Development builds report `dev-<commit>` through `--version`. Permanent release
+downloads do not require signing in and report their version tag instead.
 
 ## Quick start
 
-Requirements for building:
-
-- Go 1.18 or newer
-- GNU Make
-
-Cross-building macOS arm64 artifacts requires a Go toolchain whose standard
-library can target `darwin/arm64`. The Makefile honors `GO=/path/to/go` and, in
-this workspace, automatically uses an ignored `.tools/go1.26.5/bin/go` if it is
-present.
-
-Build and run:
+After installing, point `gpttop` at one or more vLLM deployments:
 
 ```bash
-make build
-
-./bin/gpttop \
+gpttop \
   --endpoint local=http://127.0.0.1:8000 \
   --endpoint gemma=http://10.0.0.42:8000
 ```
@@ -64,16 +129,10 @@ make build
 An endpoint may be a base URL or a full metrics URL. `/metrics` is appended
 when the URL does not already contain an explicit path.
 
-Run without building first:
-
-```bash
-go run ./cmd/gpttop --endpoint http://127.0.0.1:8000
-```
-
 Preview the interface without vLLM:
 
 ```bash
-./bin/gpttop --demo
+gpttop --demo
 ```
 
 When stdout is not a terminal, `--demo` renders the same deterministic data in
@@ -195,7 +254,7 @@ JSON output.
 Run with the configuration:
 
 ```bash
-./bin/gpttop --config ./gpttop.yaml
+gpttop --config ./gpttop.yaml
 ```
 
 Repeated CLI `--endpoint` values are appended to configured endpoints. Endpoint
@@ -366,6 +425,19 @@ access or a real terminal.
 
 ## Build and distribution
 
+Building from source is optional. It requires Go 1.18 or newer and GNU Make:
+
+```bash
+git clone https://github.com/ti3c2/gpttop.git
+cd gpttop
+make build
+./bin/gpttop --endpoint http://127.0.0.1:8000
+```
+
+The Makefile honors `GO=/path/to/go` and automatically uses an ignored
+`.tools/go1.26.5/bin/go` if present. CI tests the minimum supported Go version
+and uses the current stable Go toolchain for distributed binaries.
+
 The repository includes a `Makefile` and commits both `go.mod` and `go.sum`.
 Runtime builds must not require Python, CUDA, vLLM, Prometheus, or Grafana.
 
@@ -389,6 +461,31 @@ executable that passes:
 ./bin/gpttop --help
 ./bin/gpttop --demo
 ```
+
+### Publishing a release
+
+Create and push a version tag from the commit you want to release. For example,
+for the first release:
+
+```bash
+git switch main
+git pull --ff-only
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
+```
+
+The `ci` workflow runs formatting checks, vet, tests, the race detector, and a
+build before packaging Linux/macOS amd64/arm64 archives. It verifies the
+checksums and smoke-tests the Linux amd64 executable, then publishes the four
+archives and `checksums.txt` to a GitHub Release with generated release notes.
+Only the release job has `contents: write`; it uses the repository's automatic
+`GITHUB_TOKEN`, so no personal access token or additional secret is needed.
+
+Use a fresh `vMAJOR.MINOR.PATCH` tag for each release. Tags with a hyphen, such
+as `v0.2.0-rc.1`, are marked as prereleases and do not replace the latest stable
+download. Branch builds, pull requests, and **Run workflow** only upload
+development artifacts; they do not publish a release. Release asset names stay
+the same across versions so the latest-download links above keep working.
 
 ## Testing requirements
 
